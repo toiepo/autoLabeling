@@ -1,0 +1,17 @@
+# Handle line endings automatically for files detected as text 
+# and move them to CRLF on checkout (standard for Windows development)
+* text=auto eol=crlf
+
+# Explicitly declare text files
+*.py text eol=crlf
+*.md text eol=crlf
+*.json text eol=crlf
+*.txt text eol=crlf
+*.sh text eol=lf
+
+# Denote all files that are truly binary and should not be modified
+*.jpg binary
+*.png binary
+*.mp4 binary
+*.mov binary
+*.avi binary
