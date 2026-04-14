@@ -12,15 +12,24 @@ def main():
     parser.add_argument("--mode", choices=['track', 'refine', 'simulate', 'evaluate', 'visualize'], required=True, 
                         help="track: Run YOLO | refine: Manual UI | simulate: Create mock framing | evaluate: Compare | visualize: Play video with boxes")
     parser.add_argument("--video", help="Path to input video")
-    parser.add_argument("--json", default="data/detections.json", help="Path to tracking JSON file (Ground Truth)")
-    parser.add_argument("--eval_json", default="data/framing_results.json", help="Path to framing results JSON")
+    parser.add_argument("--json", help="Path to tracking JSON file")
+    parser.add_argument("--eval_json", help="Path to framing results JSON")
     
     args = parser.parse_args()
 
     # Define default paths if not provided
-    if args.video and not args.json:
+    if args.video:
         video_name = os.path.splitext(os.path.basename(args.video))[0]
-        args.json = f"data/{video_name}_gt.json"
+        if not args.json:
+            args.json = f"data/{video_name}_detection.json"
+        if not args.eval_json:
+            args.eval_json = f"data/{video_name}_framing.json"
+    else:
+        # Fallback if no video provided but mode requires json
+        if not args.json:
+            args.json = "data/detections.json"
+        if not args.eval_json:
+            args.eval_json = "data/framing_results.json"
 
     if args.mode == 'track':
         if not args.video:
