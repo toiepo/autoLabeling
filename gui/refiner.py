@@ -17,9 +17,16 @@ class Refiner:
 
         self.cap = cv2.VideoCapture(video_path)
         self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))
+        self.fps = max(int(self.cap.get(cv2.CAP_PROP_FPS)), 1)
         self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Scaling for display (to fit screen)
+        self.display_scale = 1.0
+        screen_h = 800
+        if self.height > screen_h:
+            self.display_scale = screen_h / self.height
+            print(f"High-res/Portrait detected. Scaling display by {self.display_scale:.2f}")
         
         self.current_frame_idx = 0
         self.selected_box_idx = -1
@@ -28,7 +35,7 @@ class Refiner:
         self.show_help = True
         
         self.window_name = f"Refinement Tool - {os.path.basename(video_path)}"
-        cv2.namedWindow(self.window_name)
+        cv2.namedWindow(self.window_name, cv2.WINDOW_AUTOSIZE)
         cv2.setMouseCallback(self.window_name, self.mouse_callback)
 
         # UI Styling
@@ -41,6 +48,10 @@ class Refiner:
         }
 
     def mouse_callback(self, event, x, y, flags, param):
+        # Remap coordinates back to original resolution
+        x = int(x / self.display_scale)
+        y = int(y / self.display_scale)
+        
         frame_key = str(self.current_frame_idx)
         if frame_key not in self.data:
             self.data[frame_key] = []
@@ -170,10 +181,22 @@ class Refiner:
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
     def run(self):
+        first_frame = True
         while True:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
             ret, frame = self.cap.read()
             if not ret: break
+
+            if first_frame:
+                fh, fw = frame.shape[:2]
+                if fh != self.height or fw != self.width:
+                    self.height, self.width = fh, fw
+                    # Resize window to fit screen if portrait
+                    screen_h = 800
+                    if self.height > screen_h:
+                        scale = screen_h / self.height
+                        cv2.resizeWindow(self.window_name, int(self.width * scale), screen_h)
+                first_frame = False
 
             frame_key = str(self.current_frame_idx)
             boxes = self.data.get(frame_key, [])
@@ -200,7 +223,13 @@ class Refiner:
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
 
             self.draw_ui(frame)
-            cv2.imshow(self.window_name, frame)
+            
+            # Show scaled version for display if needed
+            display_frame = frame
+            if self.display_scale != 1.0:
+                display_frame = cv2.resize(frame, (int(self.width * self.display_scale), int(self.height * self.display_scale)))
+            
+            cv2.imshow(self.window_name, display_frame)
             
             # Using 30ms wait to allow mouse events to update the screen in real-time
             key_code = cv2.waitKey(30)

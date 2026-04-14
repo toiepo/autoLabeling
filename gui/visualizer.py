@@ -27,6 +27,15 @@ class Visualizer:
         print("Starting visualization playback...")
         print("Controls: [Space] Pause/Play | [Q] Quit")
         
+        cv2.namedWindow(self.window_name, cv2.WINDOW_AUTOSIZE)
+        
+        # Scaling logic
+        display_scale = 1.0
+        screen_h = 800
+        if self.height > screen_h:
+            display_scale = screen_h / self.height
+            print(f"Portrait/High-res detected. Scaling view by {display_scale:.2f}")
+
         frame_idx = 0
         paused = False
         
@@ -46,10 +55,15 @@ class Visualizer:
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
 
                 # Info Overlay
-                cv2.putText(frame, f"Frame: {frame_idx}/{self.total_frames-1}", (20, 30), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1, cv2.LINE_AA)
+                cv2.putText(frame, f"Frame: {frame_idx}/{self.total_frames-1}", (20, 60), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2, cv2.LINE_AA)
                 
-                cv2.imshow(self.window_name, frame)
+                # Show scaled version for display
+                display_frame = frame
+                if display_scale != 1.0:
+                    display_frame = cv2.resize(frame, (int(self.width * display_scale), int(self.height * display_scale)))
+                
+                cv2.imshow(self.window_name, display_frame)
                 frame_idx += 1
 
             key = cv2.waitKey(int(1000 / self.fps) if not paused else 0) & 0xFF
