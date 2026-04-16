@@ -52,32 +52,48 @@ class Evaluator:
             
             fn_boxes = self.fn_data[frame_key]
             
-            for gt in gt_boxes:
-                best_iou = 0
-                best_inter = 0
-                best_union = 0
-                
-                gt_area = (gt['bbox'][2] - gt['bbox'][0]) * (gt['bbox'][3] - gt['bbox'][1])
-                
-                if not fn_boxes:
-                    best_union = gt_area
-                else:
-                    for fn in fn_boxes:
-                        inter, union = self.calculate_iou(gt['bbox'], fn['bbox'])
-                        iou = inter / union if union > 0 else 0
-                        if iou > best_iou:
-                            best_iou = iou
-                            best_inter = inter
-                            best_union = union
-                
-                total_iou += best_iou
-                total_intersection += best_inter
-                total_union += best_union
-                count += 1
-                
-                if best_iou >= 0.5: thresh_05 += 1
-                if best_iou >= 0.75: thresh_075 += 1
-                if best_iou >= 0.9: thresh_09 += 1
+            # One-to-one matching using greedy IoU (ignores IDs)
+            candidates = []
+            for i, gt in enumerate(gt_boxes):
+                for j, fn in enumerate(fn_boxes):
+                    inter, union = self.calculate_iou(gt['bbox'], fn['bbox'])
+                    iou = inter / union if union > 0 else 0
+                    if iou > 0.01: # Small threshold to consider it a candidate match
+                        candidates.append((iou, i, j, inter, union))
+            
+            # Sort candidates by IoU descending
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            
+            matched_gt = set()
+            matched_fn = set()
+            
+            for iou, gt_idx, fn_idx, inter, union in candidates:
+                if gt_idx not in matched_gt and fn_idx not in matched_fn:
+                    total_iou += iou
+                    total_intersection += inter
+                    total_union += union
+                    count += 1
+                    matched_gt.add(gt_idx)
+                    matched_fn.add(fn_idx)
+                    
+                    if iou >= 0.5: thresh_05 += 1
+                    if iou >= 0.75: thresh_075 += 1
+                    if iou >= 0.9: thresh_09 += 1
+
+            # Penalize unmatched GT boxes (Detections that were missed)
+            for i, gt in enumerate(gt_boxes):
+                if i not in matched_gt:
+                    gt_area = (gt['bbox'][2] - gt['bbox'][0]) * (gt['bbox'][3] - gt['bbox'][1])
+                    total_union += gt_area
+                    count += 1
+            
+            # Optional: Penalize unmatched FN boxes (False Positives)
+            # In framing, usually FP is less critical than FN, but can be added:
+            # for j, fn in enumerate(fn_boxes):
+            #     if j not in matched_fn:
+            #         fn_area = (fn['bbox'][2] - fn['bbox'][0]) * (fn['bbox'][3] - fn['bbox'][1])
+            #         total_union += fn_area
+            #         count += 1
 
         avg_iou = total_iou / count if count > 0 else 0
         volume_iou = total_intersection / total_union if total_union > 0 else 0

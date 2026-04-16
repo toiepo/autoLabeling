@@ -23,19 +23,23 @@ class Refiner:
         
         # Scaling for display (to fit screen)
         self.display_scale = 1.0
-        screen_h = 800
+        screen_h = 1000
         if self.height > screen_h:
             self.display_scale = screen_h / self.height
-            print(f"High-res/Portrait detected. Scaling display by {self.display_scale:.2f}")
+            print(f"Frame height {self.height} > {screen_h}. Scaling display by {self.display_scale:.2f}")
         
         self.current_frame_idx = 0
         self.selected_box_idx = -1
         self.drag_mode = None  # 'move', 'resize_tl', 'resize_br'
         self.start_point = None
         self.show_help = True
+        self.needs_redraw = True
+        self.cached_frame = None
+        self.cached_display_frame = None
+        self.cached_frame_idx = -1
         
         self.window_name = f"Refinement Tool - {os.path.basename(video_path)}"
-        cv2.namedWindow(self.window_name, cv2.WINDOW_AUTOSIZE)
+        cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
         cv2.setMouseCallback(self.window_name, self.mouse_callback)
 
         # UI Styling
@@ -96,6 +100,8 @@ class Refiner:
                 boxes.append({"id": new_id, "bbox": [x, y, x, y], "confidence": 1.0})
                 self.selected_box_idx = len(boxes) - 1
                 self.drag_mode = 'resize_br'
+            
+            self.needs_redraw = True
 
         elif event == cv2.EVENT_MOUSEMOVE:
             if self.selected_box_idx != -1 and self.selected_box_idx < len(boxes):
@@ -116,6 +122,7 @@ class Refiner:
                     bbox[0], bbox[3] = x, y
                 elif self.drag_mode == 'resize_br':
                     bbox[2], bbox[3] = x, y
+                self.needs_redraw = True
 
         elif event == cv2.EVENT_RBUTTONDOWN:
             # Delete box with a margin (makes dots/small boxes easier to hit)
@@ -125,6 +132,7 @@ class Refiner:
                 if x1 - hit_margin <= x <= x2 + hit_margin and y1 - hit_margin <= y <= y2 + hit_margin:
                     boxes.pop(i)
                     self.selected_box_idx = -1
+                    self.needs_redraw = True
                     break
 
         elif event == cv2.EVENT_LBUTTONUP:
@@ -139,6 +147,7 @@ class Refiner:
                 if bbox[0] == bbox[2] or bbox[1] == bbox[3]:
                     boxes.pop(self.selected_box_idx)
                     self.selected_box_idx = -1
+                self.needs_redraw = True
                     
             self.drag_mode = None
 
@@ -152,7 +161,7 @@ class Refiner:
 
         # Frame Info
         info = f"Frame: {self.current_frame_idx}/{self.total_frames - 1} | FPS: {self.fps}"
-        cv2.putText(frame, info, (20, 30), cv2.FONT_HERSHEY_DUPLEX, 0.7, self.colors['text'], 1, cv2.LINE_AA)
+        cv2.putText(frame, info, (20, 30), cv2.FONT_HERSHEY_DUPLEX, 0.7, self.colors['text'], 1, cv2.LINE_8)
 
         # Help Overlay
         if self.show_help:
@@ -162,33 +171,36 @@ class Refiner:
             cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
             
             instructions = [
-                "Map Controls:",
-                "[Arrows] Next/Prev Frame",
+                "Controls:",
+                "[A / D] Previous / Next Frame",
                 "[Delete] Delete box",
                 "[S] Save | [Q] Quit",
                 "---",
-                "Box ID (Selected):",
-                "[[ / ]] Dec / Inc ID",
-                "[0-9] Set ID quickly",
-                "---",
                 "Mouse:",
-                "- Center: Move",
-                "- Corners: Resize",
+                "- Click & Drag: Move/Resize",
                 "- Right-Click: Delete"
             ]
             for i, text in enumerate(instructions):
                 cv2.putText(frame, text, (self.width - w + 5, 50 + i * 20), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_8)
 
     def run(self):
-        first_frame = True
         while True:
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
-            ret, frame = self.cap.read()
-            if not ret: break
+            # 1. Update frame cache if needed
+            if self.current_frame_idx != self.cached_frame_idx:
+                self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
+                ret, frame = self.cap.read()
+                if not ret: break
+                self.cached_frame = frame
+                self.cached_frame_idx = self.current_frame_idx
+                self.needs_redraw = True
 
-            if first_frame:
-                fh, fw = frame.shape[:2]
+            # 2. Render UI only if something changed
+            if self.needs_redraw:
+                render_frame = self.cached_frame.copy()
+                
+                # Update resolution tracking if needed
+                fh, fw = render_frame.shape[:2]
                 if fh != self.height or fw != self.width:
                     self.height, self.width = fh, fw
                     # Resize window to fit screen if portrait
@@ -196,43 +208,45 @@ class Refiner:
                     if self.height > screen_h:
                         scale = screen_h / self.height
                         cv2.resizeWindow(self.window_name, int(self.width * scale), screen_h)
-                first_frame = False
 
-            frame_key = str(self.current_frame_idx)
-            boxes = self.data.get(frame_key, [])
-            
-            for i, det in enumerate(boxes):
-                x1, y1, x2, y2 = map(int, det['bbox'])
-                is_selected = (i == self.selected_box_idx)
+                frame_key = str(self.current_frame_idx)
+                boxes = self.data.get(frame_key, [])
                 
-                color = self.colors['selected'] if is_selected else self.colors['box']
-                thickness = 3 if is_selected else 2
-                
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness, cv2.LINE_AA)
-                
-                # Draw handles if selected
-                if is_selected:
-                    for px in [x1, x2]:
-                        for py in [y1, y2]:
-                            cv2.circle(frame, (px, py), 6, self.colors['handle'], -1)
+                for i, det in enumerate(boxes):
+                    x1, y1, x2, y2 = map(int, det['bbox'])
+                    is_selected = (i == self.selected_box_idx)
+                    
+                    color = self.colors['selected'] if is_selected else self.colors['box']
+                    thickness = 3 if is_selected else 2
+                    
+                    cv2.rectangle(render_frame, (x1, y1), (x2, y2), color, thickness, cv2.LINE_8)
+                    
+                    # Draw handles if selected
+                    if is_selected:
+                        for px in [x1, x2]:
+                            for py in [y1, y2]:
+                                cv2.circle(render_frame, (px, py), 6, self.colors['handle'], -1, cv2.LINE_8)
 
-                label = f"ID:{det['id']}"
-                (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-                cv2.rectangle(frame, (x1, y1 - th - 10), (x1 + tw + 10, y1), color, -1)
-                cv2.putText(frame, label, (x1 + 5, y1 - 5), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
+                    label = f"ID:{det['id']}"
+                    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+                    cv2.rectangle(render_frame, (x1, y1 - th - 10), (x1 + tw + 10, y1), color, -1)
+                    cv2.putText(render_frame, label, (x1 + 5, y1 - 5), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_8)
 
-            self.draw_ui(frame)
+                self.draw_ui(render_frame)
+                
+                # Show scaled version for display if needed
+                display_frame = render_frame
+                if self.display_scale != 1.0:
+                    display_frame = cv2.resize(render_frame, (int(self.width * self.display_scale), int(self.height * self.display_scale)), 
+                                             interpolation=cv2.INTER_LINEAR)
+                
+                cv2.imshow(self.window_name, display_frame)
+                self.needs_redraw = False
             
-            # Show scaled version for display if needed
-            display_frame = frame
-            if self.display_scale != 1.0:
-                display_frame = cv2.resize(frame, (int(self.width * self.display_scale), int(self.height * self.display_scale)))
-            
-            cv2.imshow(self.window_name, display_frame)
-            
-            # Using 30ms wait to allow mouse events to update the screen in real-time
-            key_code = cv2.waitKey(30)
+            # Using 1ms wait during dragging for responsiveness, otherwise 10ms is fine
+            wait_time = 1 if self.drag_mode else 10
+            key_code = cv2.waitKey(wait_time)
             if key_code == -1: continue
             
             key = key_code & 0xFF
@@ -242,33 +256,46 @@ class Refiner:
                 self.save()
             elif key == ord('h'):
                 self.show_help = not self.show_help
-            elif key in [8, 40, 255]: # Backspace / Delete / 255 (Windows Delete)
-                if self.selected_box_idx != -1 and self.selected_box_idx < len(boxes):
-                    boxes.pop(self.selected_box_idx)
-                    self.selected_box_idx = -1
+                self.needs_redraw = True
             
-            # ID Modification
-            elif self.selected_box_idx != -1 and self.selected_box_idx < len(boxes):
-                if key == ord(']'): # Increment ID
-                    boxes[self.selected_box_idx]['id'] += 1
-                elif key == ord('[') and boxes[self.selected_box_idx]['id'] > 0: # Decrement ID
-                    boxes[self.selected_box_idx]['id'] -= 1
-                elif ord('0') <= key <= ord('9'): # Set ID 0-9
-                    boxes[self.selected_box_idx]['id'] = int(chr(key))
-
-            # Navigation (Handling multiple platform-specific arrow codes)
-            if key in [ord('d'), 83, 3] or key_code in [2555904]: # Next (D or Right Arrow)
+            # Navigation
+            elif key == ord('d') or key == 83 or key_code == 2555904: # Next (D or Right Arrow)
                 self.current_frame_idx = min(self.current_frame_idx + 1, self.total_frames - 1)
                 self.selected_box_idx = -1
-            elif key in [ord('a'), 81, 2] or key_code in [2424832]: # Prev (A or Left Arrow)
+            elif key == ord('a') or key == 81 or key_code == 2424832: # Prev (A or Left Arrow)
                 self.current_frame_idx = max(self.current_frame_idx - 1, 0)
                 self.selected_box_idx = -1
+            
+            # ID Modification
+            elif self.selected_box_idx != -1:
+                frame_key = str(self.current_frame_idx)
+                boxes = self.data.get(frame_key, [])
+                if self.selected_box_idx < len(boxes):
+                    if key == ord(']'): # Increment ID
+                        boxes[self.selected_box_idx]['id'] += 1
+                        self.needs_redraw = True
+                    elif key == ord('[') and boxes[self.selected_box_idx]['id'] > 0: # Decrement ID
+                        boxes[self.selected_box_idx]['id'] -= 1
+                        self.needs_redraw = True
+                    elif ord('0') <= key <= ord('9'): # Set ID 0-9
+                        boxes[self.selected_box_idx]['id'] = int(chr(key))
+                        self.needs_redraw = True
+
             elif key == ord('l'): # Skip forward
                 self.current_frame_idx = min(self.current_frame_idx + 10, self.total_frames - 1)
                 self.selected_box_idx = -1
             elif key == ord('j'): # Skip backward
                 self.current_frame_idx = max(self.current_frame_idx - 10, 0)
                 self.selected_box_idx = -1
+            
+            # Delete Box handling
+            elif key in [8, 255] or key_code in [3014656]: # Backspace / Delete
+                if self.selected_box_idx != -1:
+                    frame_key = str(self.current_frame_idx)
+                    if frame_key in self.data:
+                        self.data[frame_key].pop(self.selected_box_idx)
+                        self.selected_box_idx = -1
+                        self.needs_redraw = True
 
         self.cap.release()
         cv2.destroyAllWindows()
