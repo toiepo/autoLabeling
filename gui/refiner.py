@@ -45,6 +45,8 @@ class Refiner:
         self.show_crosshair = False
         self.show_labels = True
         self.mouse_pos = (0, 0)
+        self.frame_buffer = {}  # LRU Cache for decoded frames
+        self.buffer_size = 150  # Limit RAM usage to ~150 frames
         
         self.window_name = f"Refinement Tool - {os.path.basename(video_path)}"
         cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
@@ -242,15 +244,31 @@ class Refiner:
         while True:
             # 1. Update frame cache if needed
             if self.current_frame_idx != self.cached_frame_idx:
-                # OPTIMIZATION: Only use cap.set if we are NOT stepping sequentially to avoid massive decoding lag
-                if self.current_frame_idx != self.cached_frame_idx + 1:
-                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
-                
-                ret, frame = self.cap.read()
-                if not ret: break
-                self.cached_frame = frame
-                self.cached_frame_idx = self.current_frame_idx
-                self.needs_redraw = True
+                # Check memory buffer first for instant reverse scrubbing
+                if self.current_frame_idx in self.frame_buffer:
+                    self.cached_frame = self.frame_buffer[self.current_frame_idx]
+                    self.cached_frame_idx = self.current_frame_idx
+                    self.needs_redraw = True
+                else:
+                    # OPTIMIZATION: Only use cap.set if we are NOT stepping sequentially
+                    if self.current_frame_idx != self.cached_frame_idx + 1:
+                        self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
+                    
+                    ret, frame = self.cap.read()
+                    if not ret: break
+                    self.cached_frame = frame
+                    self.cached_frame_idx = self.current_frame_idx
+                    
+                    # Store in frame buffer to fix backwards seeking lag
+                    self.frame_buffer[self.current_frame_idx] = frame.copy()
+                    
+                    # Evict oldest frames dynamically to prevent RAM overflow
+                    if len(self.frame_buffer) > self.buffer_size:
+                        # Remove the frame physically furthest away from current position
+                        furthest_idx = max(self.frame_buffer.keys(), key=lambda idx: abs(idx - self.current_frame_idx))
+                        del self.frame_buffer[furthest_idx]
+                        
+                    self.needs_redraw = True
 
             # 2. Render UI only if something changed
             if self.needs_redraw:
